@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Feinstaub-Monitoring – Mobiles SPS-Messgerät</title>
+  
+  <!-- Leaflet Map CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  
+  <!-- Clean GIS Application Style -->
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Top Application Bar -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="brand-logo-badge" style="display:flex; align-items:center; justify-content:center; background:#0284c7; width:34px; height:34px; border-radius:8px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+          <path d="M22 10h-2"/>
+          <path d="M19 6h-1"/>
+        </svg>
+      </div>
+      <!-- FastAPI "F" Lightning Badge -->
+      <div class="brand-logo-badge" style="display:flex; align-items:center; justify-content:center; background:#059669; width:34px; height:34px; border-radius:8px; font-weight:900; font-size:1.1rem; color:white; letter-spacing:-1px; font-family:monospace;" title="FastAPI Backend">
+        F
+      </div>
+      <div class="brand-title">
+        <h1>Feinstaub-Monitoring</h1>
+        <p>Umwelt- & Luftqualitätsmessung</p>
+      </div>
+    </div>
+
+    <!-- Center Navigation Tabs -->
+    <nav class="header-nav">
+      <button class="nav-tab active" data-tab="map">🗺️ Karte</button>
+      <button class="nav-tab" data-tab="analytics">📈 Diagramme</button>
+      <button class="nav-tab" data-tab="table">📋 Tabelle</button>
+      <button class="nav-tab" data-tab="settings">⚙️ Einstellungen</button>
+      <button class="nav-tab" data-tab="api-docs">📱 Handy-App API</button>
+    </nav>
+
+    <!-- Header Actions & Telemetry Status -->
+    <div class="header-actions">
+      <div class="status-badge" id="ws-status-badge">
+        <span class="pulse-dot" id="ws-pulse-dot"></span>
+        <span id="ws-status-text">Verbindung...</span>
+      </div>
+
+      <button class="btn btn-secondary btn-sm" id="btn-seed-multi-sample" title="Erzeugt Testpunkte auf der Karte">
+        ➕ Testdaten laden
+      </button>
+
+      <button class="btn btn-danger btn-sm" id="btn-clear-database" title="Löscht alle Messungen sofort ohne Reload">
+        🧹 Daten leeren
+      </button>
+
+      <a href="/docs" target="_blank" class="btn btn-secondary btn-sm" title="Interaktive API-Dokumentation">
+        API
+      </a>
+    </div>
+  </header>
+
+  <!-- Main Viewport (Full Height) -->
+  <main class="main-viewport">
+
+    <!-- ======================================================== -->
+    <!-- TAB 1: LIVE-KARTE (DEFAULT HAUPTANSICHT) -->
+    <!-- ======================================================== -->
+    <div class="tab-pane active" id="tab-map">
+
+      <!-- ===== MOBILE KPI STRIP (nur auf Smartphones sichtbar) ===== -->
+      <div class="mobile-kpi-strip" id="mobile-kpi-strip">
+        <div class="mobile-kpi-chip highlight-pm">
+          <div class="mobile-kpi-label">Ø PM2.5</div>
+          <div class="mobile-kpi-value"><span id="m-kpi-pm25">0.0</span> <small>µg/m³</small></div>
+        </div>
+        <div class="mobile-kpi-chip">
+          <div class="mobile-kpi-label">Messungen</div>
+          <div class="mobile-kpi-value" id="m-kpi-count">0</div>
+        </div>
+        <div class="mobile-kpi-chip">
+          <div class="mobile-kpi-label">Temperatur</div>
+          <div class="mobile-kpi-value"><span id="m-kpi-temp">0.0</span> <small>°C</small></div>
+        </div>
+        <div class="mobile-kpi-chip">
+          <div class="mobile-kpi-label">Feuchte</div>
+          <div class="mobile-kpi-value"><span id="m-kpi-hum">0.0</span> <small>%</small></div>
+        </div>
+        <div class="mobile-kpi-chip">
+          <div class="mobile-kpi-label">Luftdruck</div>
+          <div class="mobile-kpi-value"><span id="m-kpi-press">0.0</span> <small>hPa</small></div>
+        </div>
+        <div class="mobile-kpi-chip">
+          <div class="mobile-kpi-label">Gerät</div>
+          <div class="mobile-kpi-value" style="color:#10b981;">SPS-01</div>
+        </div>
+        <div class="mobile-kpi-chip" id="m-ws-chip">
+          <div class="mobile-kpi-label">Status</div>
+          <div class="mobile-kpi-value"><span id="m-kpi-ws">●</span> Live</div>
+        </div>
+      </div>
+
+      <div class="map-layout">
+        
+        <!-- Left Telemetry & Hotspot Sidebar -->
+        <aside class="map-sidebar" id="map-sidebar">
+          <div class="sidebar-header">
+            <span>SPS-Telemetrie</span>
+            <span style="font-size:0.75rem; color:#60a5fa;" id="kpi-last-update">Warte auf Messdaten...</span>
+          </div>
+
+          <div class="sidebar-content">
+            <!-- Telemetry Matrix -->
+            <div class="telemetry-grid">
+              <div class="telemetry-cell highlight-yellow" id="kpi-card-pm25">
+                <div class="telemetry-label">Ø PM2.5</div>
+                <div class="telemetry-val"><span id="kpi-avg-pm25">0.0</span> <small>µg/m³</small></div>
+              </div>
+              <div class="telemetry-cell">
+                <div class="telemetry-label">Messungen</div>
+                <div class="telemetry-val" id="kpi-total-count">0</div>
+              </div>
+              <div class="telemetry-cell">
+                <div class="telemetry-label">Temperatur</div>
+                <div class="telemetry-val"><span id="kpi-avg-temp">0.0</span> <small>°C</small></div>
+              </div>
+              <div class="telemetry-cell">
+                <div class="telemetry-label">Luftfeuchte</div>
+                <div class="telemetry-val"><span id="kpi-avg-hum">0.0</span> <small>%</small></div>
+              </div>
+              <div class="telemetry-cell">
+                <div class="telemetry-label">Luftdruck</div>
+                <div class="telemetry-val"><span id="kpi-avg-press">0.0</span> <small>hPa</small></div>
+              </div>
+              <div class="telemetry-cell">
+                <div class="telemetry-label">Messgerät</div>
+                <div class="telemetry-val" style="font-size:0.95rem; color:#10b981;">SPS-01</div>
+              </div>
+            </div>
+
+            <!-- Empty Data Callout if 0 points -->
+            <div id="empty-data-hint" style="background:var(--bg-panel); border:1px dashed var(--border-color); padding:0.85rem; border-radius:var(--radius-sm); font-size:0.8rem; color:var(--text-muted);">
+              <strong style="color:var(--text-main); display:block; margin-bottom:4px;">🌱 Bereit für Realdaten</strong>
+              Die Datenbank ist leer. Sobald die Handy-App die erste Messung an <code>POST /api/messung</code> sendet, erscheint der Punkt sofort live auf der Karte.
+              <div style="margin-top:0.6rem; display:flex; flex-direction:column; gap:0.4rem;">
+                <button class="btn btn-primary btn-sm" id="btn-seed-multi-sample-side" style="width:100%;">
+                  ➕ 25 Testpunkte erzeugen
+                </button>
+              </div>
+            </div>
+
+            <!-- Street Hotspot Leaderboard -->
+            <div>
+              <div style="font-size:0.75rem; text-transform:uppercase; color:var(--text-dim); font-weight:700; margin-bottom:0.5rem; display:flex; justify-content:space-between;">
+                <span>Erfasste Straßen</span>
+                <span style="font-size:0.7rem; color:var(--accent-light);">Ø PM2.5</span>
+              </div>
+              <div id="street-ranking-container">
+                <p style="color:#64748b; font-size:12px; text-align:center; padding:1rem;">Noch keine Straßen erfasst.</p>
+              </div>
+            </div>
+
+          </div>
+        </aside>
+
+        <!-- Center Map Area -->
+        <div class="map-container-area">
+          
+          <!-- Leaflet Map Canvas -->
+          <div id="leaflet-map"></div>
+
+          <!-- Floating Map Controls (Top Right) -->
+          <div class="map-floating-bar">
+            <span style="font-weight:600; color:var(--text-muted);">Sensor:</span>
+            <select class="select-clean" id="map-metric-select">
+              <option value="pm2_5" selected>PM2.5 (Feinstaub)</option>
+              <option value="pm1_0">PM1.0 (Ultrafein)</option>
+              <option value="pm4_0">PM4.0 (Atembar)</option>
+              <option value="pm10_0">PM10.0 (Inhalierbar)</option>
+            </select>
+
+            <span style="font-weight:600; color:var(--text-muted); margin-left:4px;">Modus:</span>
+            <select class="select-clean" id="map-view-mode">
+              <option value="markers" selected>Messpunkte</option>
+              <option value="heatmap">Heatmap</option>
+            </select>
+
+            <label style="display:flex; align-items:center; gap:0.35rem; cursor:pointer; margin-left:4px;">
+              <input type="checkbox" id="map-toggle-routes" checked style="accent-color:var(--accent);">
+              <span>Route</span>
+            </label>
+
+            <button class="btn btn-secondary btn-sm" id="map-center-btn" title="Auf alle vorhandenen Messdaten zoomen">
+              🎯 Zentrieren
+            </button>
+          </div>
+
+          <!-- Floating Timeline Dock (Bottom Center) -->
+          <div class="map-timeline-dock">
+            <button class="btn btn-primary btn-sm" id="timeline-play-btn" style="min-width:65px;">
+              ▶ Play
+            </button>
+            <input type="range" id="timeline-slider" min="0" max="100" value="100">
+            <span class="timeline-timestamp" id="timeline-info">Bereit</span>
+          </div>
+
+          <!-- Floating Legend (Bottom Right) -->
+          <div class="map-floating-legend">
+            <div class="legend-head">PM2.5 Belastung</div>
+            <div class="legend-row">
+              <span class="legend-box" style="background:#10b981;"></span>
+              <span>0 – 10 µg/m³ (Gut)</span>
+            </div>
+            <div class="legend-row">
+              <span class="legend-box" style="background:#f59e0b;"></span>
+              <span>10 – 25 µg/m³ (Mäßig)</span>
+            </div>
+            <div class="legend-row">
+              <span class="legend-box" style="background:#f97316;"></span>
+              <span>25 – 50 µg/m³ (Ungesund)</span>
+            </div>
+            <div class="legend-row">
+              <span class="legend-box" style="background:#ef4444;"></span>
+              <span>&gt; 50 µg/m³ (Sehr hoch)</span>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 2: ANALYSEN & DIAGRAMME -->
+    <!-- ======================================================== -->
+    <div class="tab-pane" id="tab-analytics">
+      <div class="subpage-container">
+        
+        <!-- Filter Bar -->
+        <div class="panel-box">
+          <div class="panel-title">Messdaten-Filterung</div>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:0.75rem; align-items:end;">
+            <div>
+              <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:2px;">Datum von</label>
+              <input type="date" class="input-clean" id="filter-date-start" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:2px;">Datum bis</label>
+              <input type="date" class="input-clean" id="filter-date-end" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:2px;">Uhrzeit von</label>
+              <input type="time" class="input-clean" id="filter-time-start" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:2px;">Uhrzeit bis</label>
+              <input type="time" class="input-clean" id="filter-time-end" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:2px;">Min. PM2.5</label>
+              <input type="number" class="input-clean" id="filter-pm-min" placeholder="0" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:2px;">Max. PM2.5</label>
+              <input type="number" class="input-clean" id="filter-pm-max" placeholder="200" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:2px;">Straße</label>
+              <input type="text" class="input-clean" id="filter-street-input" placeholder="Straßenname..." style="width:100%;">
+            </div>
+            <div style="display:flex; gap:0.5rem;">
+              <button class="btn btn-primary" id="filter-apply-btn" style="flex:1;">Anwenden</button>
+              <button class="btn btn-secondary" id="filter-reset-btn">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h4>Feinstaub-Verlauf über Zeit (PM1.0, PM2.5, PM4.0, PM10.0)</h4>
+            <div class="canvas-wrapper">
+              <canvas id="chart-pm-timeseries"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <h4>Partikelgrößen-Vergleich (Durchschnitt)</h4>
+            <div class="canvas-wrapper">
+              <canvas id="chart-pm-comparison"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <h4>Temperaturverlauf (°C)</h4>
+            <div class="canvas-wrapper">
+              <canvas id="chart-temperature"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <h4>Luftfeuchtigkeit (%) & Luftdruck (hPa)</h4>
+            <div class="canvas-wrapper" style="display:grid; grid-template-rows:1fr 1fr; gap:0.5rem;">
+              <div style="position:relative; width:100%; height:100%;"><canvas id="chart-humidity"></canvas></div>
+              <div style="position:relative; width:100%; height:100%;"><canvas id="chart-pressure"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 3: TABELLE & EXPORT -->
+    <!-- ======================================================== -->
+    <div class="tab-pane" id="tab-table">
+      <div class="subpage-container">
+        <div class="panel-box">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <input type="text" class="input-clean" id="table-search-input" placeholder="Suche nach Straße, Datum..." style="min-width:220px;">
+              <select class="select-clean" id="table-level-filter">
+                <option value="all">Alle Belastungsstufen</option>
+                <option value="green">Nur Grün (0–10 µg/m³)</option>
+                <option value="yellow">Nur Gelb (10–25 µg/m³)</option>
+                <option value="orange">Nur Orange (25–50 µg/m³)</option>
+                <option value="red">Nur Rot (> 50 µg/m³)</option>
+              </select>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <button class="btn btn-secondary btn-sm" id="btn-export-csv">📥 CSV Export</button>
+              <button class="btn btn-secondary btn-sm" id="btn-export-json">📥 JSON Export</button>
+              <select class="select-clean" id="table-page-size">
+                <option value="15">15 Zeilen</option>
+                <option value="25">25 Zeilen</option>
+                <option value="50">50 Zeilen</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="data-table-wrapper">
+            <table class="clean-table">
+              <thead>
+                <tr>
+                  <th data-sort="id">ID ↕</th>
+                  <th data-sort="timestamp">Zeitstempel ↕</th>
+                  <th data-sort="robot_id">Gerät ↕</th>
+                  <th data-sort="street">Straße ↕</th>
+                  <th data-sort="pm2_5">PM2.5 ↕</th>
+                  <th data-sort="pm10_0">PM10 ↕</th>
+                  <th data-sort="temperature">Temperatur ↕</th>
+                  <th data-sort="humidity">Feuchte ↕</th>
+                  <th data-sort="pressure">Luftdruck ↕</th>
+                  <th>Aktion</th>
+                </tr>
+              </thead>
+              <tbody id="measurements-table-body">
+                <!-- Dynamically populated rows -->
+              </tbody>
+            </table>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem;">
+            <span style="font-size:0.75rem; color:var(--text-muted);" id="table-page-info">Lädt...</span>
+            <div style="display:flex; gap:0.4rem;">
+              <button class="btn btn-secondary btn-sm" id="table-prev-page">◀ Vorherige</button>
+              <button class="btn btn-secondary btn-sm" id="table-next-page">Nächste ▶</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 4: GRENZWERTE & KARTEN-EINSTELLUNGEN -->
+    <!-- ======================================================== -->
+    <div class="tab-pane" id="tab-settings">
+      <div class="subpage-container" style="max-width:680px;">
+        <div class="panel-box">
+          <div class="panel-title">Karten- & System-Einstellungen</div>
+
+          <div style="background:var(--bg-panel); border:1px solid var(--border-color); padding:0.85rem; border-radius:var(--radius-sm); margin-bottom:1.25rem;">
+            <div style="font-size:0.82rem; font-weight:700; color:var(--text-main); margin-bottom:4px;">🗺️ Karten-API & Kacheln</div>
+            <div style="font-size:0.78rem; color:var(--text-muted);">
+              Standardmäßig ist <strong>OpenStreetMap (kostenlos & ohne API-Key)</strong> aktiv. Du musst hier <strong>keinen Key eingeben</strong>, die Karte funktioniert sofort weltweit.
+            </div>
+          </div>
+
+          <form id="settings-form">
+            <div style="display:flex; flex-direction:column; gap:1rem;">
+              <div>
+                <label style="font-size:0.75rem; color:#10b981; font-weight:700;">🟢 Grün (Gut) bis max. (µg/m³)</label>
+                <input type="number" step="0.5" class="input-clean" id="cfg-green-max" style="width:100%; margin-top:3px;" required>
+              </div>
+              <div>
+                <label style="font-size:0.75rem; color:#f59e0b; font-weight:700;">🟡 Gelb (Mäßig) bis max. (µg/m³)</label>
+                <input type="number" step="0.5" class="input-clean" id="cfg-yellow-max" style="width:100%; margin-top:3px;" required>
+              </div>
+              <div>
+                <label style="font-size:0.75rem; color:#f97316; font-weight:700;">🟠 Orange (Ungesund) bis max. (µg/m³)</label>
+                <input type="number" step="0.5" class="input-clean" id="cfg-orange-max" style="width:100%; margin-top:3px;" required>
+              </div>
+
+              <hr style="border:none; border-top:1px solid var(--border-color); margin:0.5rem 0;">
+
+              <div>
+                <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; cursor:pointer;">
+                  <input type="checkbox" id="cfg-require-auth" style="accent-color:var(--accent);">
+                  <span>API-Token für Handy-App erzwingen (Header 'X-API-Key')</span>
+                </label>
+              </div>
+              <div>
+                <label style="font-size:0.75rem; color:var(--text-muted);">API-Schlüssel</label>
+                <input type="text" class="input-clean" id="cfg-api-key" style="width:100%; margin-top:3px;">
+              </div>
+
+              <button type="submit" class="btn btn-primary" style="margin-top:0.5rem;">
+                Einstellungen speichern
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 5: API DOKUMENTATION FÜR DIE HANDY-APP -->
+    <!-- ======================================================== -->
+    <div class="tab-pane" id="tab-api-docs">
+      <div class="subpage-container" style="max-width:800px;">
+        <div class="panel-box">
+          <div class="panel-title">Schnittstellen-Dokumentation für externe Handy-App</div>
+          <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:1rem;">
+            Die Smartphone-App sendet Messwerte des SPS-Geräts per HTTP-POST direkt an diesen Server:
+          </p>
+
+          <div style="background:var(--bg-panel); border:1px solid var(--border-color); padding:0.85rem; border-radius:var(--radius-sm); margin-bottom:1rem;">
+            <div style="font-family:monospace; color:var(--accent-light); font-weight:700;">POST /api/messung</div>
+            <div style="font-size:0.75rem; color:var(--text-dim); margin-top:3px;">Header: Content-Type: application/json</div>
+          </div>
+
+          <h5 style="font-size:0.82rem; color:var(--text-main); margin-bottom:0.4rem;">Minimaler JSON-Payload:</h5>
+          <pre class="code-view">{
+  "sps_id": "SPS-01",
+  "latitude": 52.516842,
+  "longitude": 13.388865,
+  "pm1_0": 7.4,
+  "pm2_5": 14.8,
+  "pm4_0": 19.5,
+  "pm10_0": 26.2,
+  "temperature": 20.5,
+  "humidity": 58.0,
+  "pressure": 1013.25
+}</pre>
+
+          <p style="font-size:0.78rem; color:var(--text-muted); margin-top:0.75rem;">
+            💡 <strong>Tolerante Schnittstelle:</strong> Der Server akzeptiert für das Gerät sowohl <code>sps_id</code>, <code>device_id</code> als auch <code>robot_id</code>.
+            Für Sensoren werden auch <code>lat</code>, <code>lng</code>, <code>PM2.5</code>, <code>temp</code>, <code>hum</code>, <code>press</code> akzeptiert.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Detail Modal -->
+  <div class="modal-backdrop" id="detail-modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 style="font-size:0.95rem; font-weight:700;">Messpunkt-Inspektion</h3>
+        <button class="modal-close" id="detail-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="detail-modal-content"></div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Leaflet & Chart Libraries -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+
+  <!-- App Script Controllers -->
+  <script src="/static/js/websocket.js"></script>
+  <script src="/static/js/map.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/table.js"></script>
+  <script src="/static/js/street_stats.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
